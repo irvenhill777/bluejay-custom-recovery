@@ -8,7 +8,7 @@ on:
         description: Build vendor_boot on RunsOn (AWS charges apply)
         type: boolean
         required: false
-        default: false
+        default: true
 
 permissions:
   contents: read
