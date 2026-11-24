@@ -25,9 +25,6 @@ jobs:
     env:
       TWRP_MANIFEST_SHA: 814b553116ceedde197f70389cff9661d81d8337
       KERNEL_MANIFEST_SHA: 32530252adf8a4cff0f8520fa29616af6695bd1e
-      ANDROID_SOURCE: ${{ runner.temp }}/bluejay-twrp
-      KERNEL_SOURCE: ${{ runner.temp }}/bluejay-kernel
-      ARTIFACT_DIR: ${{ runner.temp }}/bluejay-artifact
 
     steps:
       - name: Start RunsOn runner
@@ -72,9 +69,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$ARTIFACT_DIR"
-          mkdir -p "$ANDROID_SOURCE"
-          cd "$ANDROID_SOURCE"
+          android_source="$RUNNER_TEMP/bluejay-twrp"
+          artifact_dir="$RUNNER_TEMP/bluejay-artifact"
+          mkdir -p "$artifact_dir" "$android_source"
+          cd "$android_source"
           repo init \
             --depth=1 \
             --manifest-url=https://github.com/TWRP-Test/platform_manifest_twrp_aosp \
@@ -90,7 +88,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/local_manifests/bluejay.xml" .repo/local_manifests/
           repo sync --current-branch --no-clone-bundle --no-tags -j8
 
-          recovery="$ANDROID_SOURCE/bootable/recovery"
+          recovery="$android_source/bootable/recovery"
           labs_patch="$GITHUB_WORKSPACE/device/google/bluejay-twrp/patches/gui2-labs.patch"
           git -C "$recovery" apply --check "$labs_patch"
           git -C "$recovery" apply "$labs_patch"
@@ -98,14 +96,17 @@ jobs:
           git -C vendor/google/bluejay lfs pull
           mkdir -p device/google/bluejay-twrp
           cp -a "$GITHUB_WORKSPACE/device/google/bluejay-twrp/." device/google/bluejay-twrp/
-          repo manifest -r -o "$ARTIFACT_DIR/twrp-sources.xml"
+          repo manifest -r -o "$artifact_dir/twrp-sources.xml"
 
       - name: Build matching Bluejay kernel
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$KERNEL_SOURCE" "$ARTIFACT_DIR"
-          cd "$KERNEL_SOURCE"
+          kernel_source="$RUNNER_TEMP/bluejay-kernel"
+          android_source="$RUNNER_TEMP/bluejay-twrp"
+          artifact_dir="$RUNNER_TEMP/bluejay-artifact"
+          mkdir -p "$kernel_source" "$artifact_dir"
+          cd "$kernel_source"
           repo init \
             --depth=1 \
             --manifest-url=https://github.com/LineageOS/android_kernel_google_gs-6.1_manifest \
@@ -118,37 +119,39 @@ jobs:
           fi
 
           repo sync --current-branch --no-clone-bundle --no-tags -j8
-          ./build_bluejay.sh 2>&1 | tee "$ARTIFACT_DIR/kernel-build.log"
+          ./build_bluejay.sh 2>&1 | tee "$artifact_dir/kernel-build.log"
 
-          dist="$KERNEL_SOURCE/out/bluejay/dist"
+          dist="$kernel_source/out/bluejay/dist"
           if [[ ! -s "$dist/boot.img" ]]; then
             echo "::error::Bluejay kernel build did not produce the expected boot.img."
             exit 1
           fi
-          cp -a "$dist/." "$ANDROID_SOURCE/device/google/bluejay-kernels/6.1/"
+          cp -a "$dist/." "$android_source/device/google/bluejay-kernels/6.1/"
 
       - name: Build recovery in vendor_boot
         shell: bash
         run: |
           set -eo pipefail
-          cd "$ANDROID_SOURCE"
-          repo manifest -r -o "$ARTIFACT_DIR/recovery-sources.xml"
+          android_source="$RUNNER_TEMP/bluejay-twrp"
+          artifact_dir="$RUNNER_TEMP/bluejay-artifact"
+          cd "$android_source"
+          repo manifest -r -o "$artifact_dir/recovery-sources.xml"
           (
             source build/envsetup.sh
             lunch twrp_bluejay-eng
             mka vendorbootimage
-          ) 2>&1 | tee "$ARTIFACT_DIR/recovery-build.log"
+          ) 2>&1 | tee "$artifact_dir/recovery-build.log"
 
-          image="$ANDROID_SOURCE/out/target/product/bluejay/vendor_boot.img"
+          image="$android_source/out/target/product/bluejay/vendor_boot.img"
           if [[ ! -s "$image" ]]; then
             echo "::error::Build completed without the expected vendor_boot.img."
             exit 1
           fi
 
-          cp "$image" "$ARTIFACT_DIR/vendor_boot.img"
-          sha256sum "$ARTIFACT_DIR/vendor_boot.img" > "$ARTIFACT_DIR/SHA256SUMS"
-          stat --printf='vendor_boot.img size: %s bytes\n' "$ARTIFACT_DIR/vendor_boot.img" \
-            > "$ARTIFACT_DIR/image-info.txt"
+          cp "$image" "$artifact_dir/vendor_boot.img"
+          sha256sum "$artifact_dir/vendor_boot.img" > "$artifact_dir/SHA256SUMS"
+          stat --printf='vendor_boot.img size: %s bytes\n' "$artifact_dir/vendor_boot.img" \
+            > "$artifact_dir/image-info.txt"
 
       - name: Upload build output and diagnostics
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
