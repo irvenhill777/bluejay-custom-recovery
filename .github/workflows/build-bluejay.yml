@@ -26,7 +26,7 @@ jobs:
       RECOVERY_GUI_SHA: a93a12ec107265ab9c3c7fe3e4f96c8740a01337
     steps:
       - name: Check out build configuration
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Validate local manifest XML
         run: ruby -r rexml/document -e 'REXML::Document.new(File.read("local_manifests/bluejay.xml"))'
