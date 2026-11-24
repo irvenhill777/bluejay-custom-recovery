@@ -18,7 +18,7 @@ These sources are research candidates only. The TWRP-Test manifest is a communit
 
 The previous `irvenhill777/android_device_google_bluejay` `twrp-android16` candidate is not used as-is: its product metadata is stale and its board configuration contains a `2099-12-31` security-patch override. The older `Tomatcree01/android_manifest_google_bluejay` `twrp-13` manifest is Android 13-era.
 
-The manual workflow requests an ephemeral RunsOn AWS runner (16 vCPU, 64 GB RAM, 600 GB gp3 volume) and checks for at least 500 GB free disk. RunsOn's quickstart supports personal GitHub accounts, but requires its GitHub App and AWS stack to be configured; neither has been installed from this session. AWS charges apply. Previous workflow attempts failed before a job ran, so no build diagnostics or image were produced.
+The default workflow uses a free GitHub-hosted runner to apply the pinned GUI patch and compile its localization sources; this does not build an image. A separate manual `build_image` opt-in requests an ephemeral RunsOn AWS runner (16 vCPU, 64 GB RAM, 600 GB gp3 volume) and checks for at least 500 GB free disk. RunsOn's quickstart supports personal GitHub accounts, but its GitHub App and AWS stack must be configured before opting in; AWS charges apply. No recovery image has been produced.
 
 ## Hardware validation
 

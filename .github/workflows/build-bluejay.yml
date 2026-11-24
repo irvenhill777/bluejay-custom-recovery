@@ -3,6 +3,12 @@ name: Build Bluejay TWRP vendor_boot
 
 on:
   workflow_dispatch:
+    inputs:
+      build_image:
+        description: Build vendor_boot on RunsOn (AWS charges apply)
+        type: boolean
+        required: false
+        default: false
   push:
     branches:
       - bluejay-pixel6a
@@ -19,7 +25,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RECOVERY_GUI_SHA: a93a12ec107265ab9c3c7fe3e4f96c8740a01337
+    steps:
+      - name: Check out build configuration
+        uses: actions/checkout@v4
+
+      - name: Validate local manifest XML
+        run: ruby -r rexml/document -e 'REXML::Document.new(File.read("local_manifests/bluejay.xml"))'
+
+      - name: Apply GUI patch and compile translations
+        shell: bash
+        run: |
+          set -euo pipefail
+          recovery_source="$RUNNER_TEMP/twrp-gui2"
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/TWRP-Test/android_bootable_recovery.git "$recovery_source"
+          git -C "$recovery_source" sparse-checkout init --cone
+          git -C "$recovery_source" sparse-checkout set gui2
+          git -C "$recovery_source" fetch --depth=1 origin "$RECOVERY_GUI_SHA"
+          git -C "$recovery_source" checkout --detach FETCH_HEAD
+
+          labs_patch="$GITHUB_WORKSPACE/device/google/bluejay-twrp/patches/gui2-labs.patch"
+          git -C "$recovery_source" apply --check "$labs_patch"
+          git -C "$recovery_source" apply "$labs_patch"
+
+          g++ -std=c++20 -Wall -Wextra -Werror -Wmissing-field-initializers \
+            -I "$recovery_source/gui2" -fsyntax-only \
+            "$recovery_source/gui2/i18n/en.cpp" \
+            "$recovery_source/gui2/i18n/ru.cpp" \
+            "$recovery_source/gui2/i18n/zh_cn.cpp" \
+            "$recovery_source/gui2/i18n/zh_tw.cpp" \
+            "$recovery_source/gui2/i18n/i18n.cpp"
+
   build:
+    needs: validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_image }}
     runs-on: runs-on=${{ github.run_id }}/family=m8i/cpu=16/ram=64/volume=600gb:gp3/image=ubuntu24-full-x64
     timeout-minutes: 360
     env:
