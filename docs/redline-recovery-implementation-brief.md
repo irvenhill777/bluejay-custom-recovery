@@ -12,7 +12,7 @@ The experimental candidate is the [TWRP-Test `twrp-16.0` manifest](https://githu
 
 The earlier `irvenhill777/android_device_google_bluejay` `twrp-android16` branch is not used as-is because its product metadata is stale and its board configuration has a `2099-12-31` security-patch override. The older linked Bluejay manifest is Android 13-era.
 
-The default workflow performs free source-level checks on a GitHub-hosted runner. Building `vendor_boot.img` remains a manual opt-in that uses an ephemeral RunsOn AWS runner with 16 vCPU, 64 GB RAM, and a 600 GB volume, then checks for at least 500 GB free disk. RunsOn supports personal GitHub accounts, but requires its GitHub App and AWS stack to be set up and incurs AWS charges; review [its quickstart](https://runs-on.com/quickstart/) and [pricing](https://runs-on.com/pricing/) before opting in.
+The validation workflow performs free source-level checks on a GitHub-hosted runner. Building `vendor_boot.img` is in a separate manual-only workflow and requires explicitly setting `build_image` to `true`; it uses an ephemeral RunsOn AWS runner with 16 vCPU, 64 GB RAM, and a 600 GB volume, then checks for at least 500 GB free disk. RunsOn supports personal GitHub accounts, but requires its GitHub App and AWS stack to be set up and incurs AWS charges; review [its quickstart](https://runs-on.com/quickstart/) and [pricing](https://runs-on.com/pricing/) before opting in.
 
 ## Functional specification
 
