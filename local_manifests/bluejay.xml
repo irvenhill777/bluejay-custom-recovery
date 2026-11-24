@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+    <remote name="evolution"
+            fetch="https://github.com/Evolution-X-Devices" />
+    <remote name="lineage"
+            fetch="https://github.com/LineageOS" />
+
+    <project name="device_google_bluejay"
+             path="device/google/bluejay"
+             remote="evolution"
+             revision="c44661447ee6cabe0fa5980d897021ea56067d63" />
+    <project name="device_google_gs101"
+             path="device/google/gs101"
+             remote="evolution"
+             revision="7da0b274fd6ad79147aa97b6e976cf510736329f" />
+    <project name="device_google_gs-common"
+             path="device/google/gs-common"
+             remote="evolution"
+             revision="52b4e62c80f982e895da2b13b6421e1055423b4d" />
+    <project name="vendor_google_bluejay"
+             path="vendor/google/bluejay"
+             remote="evolution"
+             revision="5e2b5c0832c7bfb077332691e0193be6ab8829ae" />
+    <project name="android_device_google_bluejay-kernels"
+             path="device/google/bluejay-kernels"
+             remote="lineage"
+             revision="3d5a17b216f7ed64816e6fd1722fcbb8858fd176" />
+</manifest>

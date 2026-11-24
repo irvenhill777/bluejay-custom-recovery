@@ -2,7 +2,7 @@
 
 Experimental build configuration and validation notes for the Google Pixel 6a (`bluejay`). The intended UI palette is red and black; credit `luhhcarrl2x` in derivative UI/build work.
 
-> **Status: not yet Android 16-ready or device-validated.** This repository currently documents the target and required checks; it does not claim that a recovery image boots, supports touch, decrypts data, or mounts USB storage. Do not flash an image from this project until the validation checklist passes on a test device.
+> **Status: experimental build scaffold; no image has been built or device-validated.** The workflow targets a TWRP-based `vendor_boot.img` build on a large GitHub Actions runner. It does not claim that an image boots, supports touch, decrypts data, or mounts USB storage. Do not flash an image from this project until the validation checklist passes on a test device.
 
 ## Target
 
@@ -14,9 +14,15 @@ Experimental build configuration and validation notes for the Google Pixel 6a (`
 
 ## Current source limitations
 
-The currently referenced device tree is `irvenhill777/android_device_google_bluejay` on branch `bluejay_beta-user-UpsideDownCake-UPP2.230217.004-9663077-release-keys`. Its branch name indicates an Android 14-era base. Although its `BoardConfig.mk` sets `PLATFORM_VERSION := 16.1.0`, that value alone does not establish Android 16 compatibility. The tree also uses a prebuilt kernel and needs to be validated against the exact recovery source, vendor blobs, kernel, and boot image format.
+The recovery framework is fetched by the manual workflow; only the Bluejay TWRP product overlay and pinned local manifest are kept here. The current **experimental source candidates** are:
 
-The referenced `Tomatcree01/android_manifest_google_bluejay` branch `twrp-13` is an Android 13-era manifest. The available Custom Recovery Builder TWRP workflow offers `twrp-12.1`; neither is an Android 16 source baseline. Do not treat either as an Android 16 build configuration.
+- Recovery framework: [TWRP-Test `twrp-16.0`](https://github.com/TWRP-Test/platform_manifest_twrp_aosp/tree/twrp-16.0), manifest commit `814b553116ceedde197f70389cff9661d81d8337`, based on AOSP `android16.0.0_r1`. This is a community manifest, not an official Team Win release, and its manifest needs compatibility review before use.
+- Bluejay device/vendor configuration: [Evolution X `bka`](https://github.com/Evolution-X-Devices/device_google_bluejay/tree/bka), commit `c44661447ee6cabe0fa5980d897021ea56067d63`, with [vendor blobs `bka`](https://github.com/Evolution-X-Devices/vendor_google_bluejay/tree/bka). These are ROM sources, not a ready-made TWRP product tree.
+- Kernel dependencies: [LineageOS GS-6.1 manifest `lineage-23.2`](https://github.com/LineageOS/android_kernel_google_gs-6.1_manifest/tree/lineage-23.2), commit `32530252adf8a4cff0f8520fa29616af6695bd1e`, and the Bluejay-specific dependencies declared by the device tree. Compatibility with the TWRP manifest still needs a build and device validation.
+
+The previous `irvenhill777/android_device_google_bluejay` `twrp-android16` branch is not used as-is: its product metadata is stale and its board configuration contains a `2099-12-31` security-patch override. The `Tomatcree01/android_manifest_google_bluejay` `twrp-13` manifest is Android 13-era.
+
+The candidate stack is **not yet a validated build baseline**. The first manual workflow attempts a minimal recovery build and exports an unflashed `vendor_boot.img`; it does not install or flash the image. AOSP's published full-source requirements are 400 GB free disk and at least 64 GB RAM. The workflow requires a GitHub larger runner labeled `ubuntu-24.04-16core` and fails early if fewer than 500 GB free disk, 64 GB RAM, or 16 CPU cores are available.
 
 ## Storage expectations
 

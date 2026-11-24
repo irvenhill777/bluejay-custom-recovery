@@ -1,0 +1,143 @@
+name: Build Bluejay TWRP vendor_boot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bluejay-twrp-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on:
+      labels: ubuntu-24.04-16core
+    timeout-minutes: 360
+    env:
+      TWRP_MANIFEST_SHA: 814b553116ceedde197f70389cff9661d81d8337
+      KERNEL_MANIFEST_SHA: 32530252adf8a4cff0f8520fa29616af6695bd1e
+      ANDROID_SOURCE: ${{ runner.temp }}/bluejay-twrp
+      KERNEL_SOURCE: ${{ runner.temp }}/bluejay-kernel
+      ARTIFACT_DIR: ${{ runner.temp }}/bluejay-artifact
+
+    steps:
+      - name: Check out build configuration
+        uses: actions/checkout@v4
+
+      - name: Check runner capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          disk_gb="$(df -BG --output=avail "$RUNNER_TEMP" | awk 'NR == 2 { gsub(/G/, ""); print $1 }')"
+          memory_kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)"
+          cpu_count="$(nproc)"
+
+          if (( disk_gb < 500 )); then
+            echo "::error::At least 500 GB free disk is required; runner has ${disk_gb} GB."
+            exit 1
+          fi
+          if (( memory_kb < 60000000 )); then
+            echo "::error::At least 64 GB RAM is required; runner has ${memory_kb} kB."
+            exit 1
+          fi
+          if (( cpu_count < 16 )); then
+            echo "::error::At least 16 CPU cores are required; runner has ${cpu_count}."
+            exit 1
+          fi
+
+          df -h "$RUNNER_TEMP"
+          free -h
+          nproc
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git git-lfs repo curl ca-certificates
+
+      - name: Sync TWRP Android 16 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          mkdir -p "$ANDROID_SOURCE"
+          cd "$ANDROID_SOURCE"
+          repo init \
+            --depth=1 \
+            --manifest-url=https://github.com/TWRP-Test/platform_manifest_twrp_aosp \
+            --manifest-branch=twrp-16.0
+
+          manifest_sha="$(git -C .repo/manifests rev-parse HEAD)"
+          if [[ "$manifest_sha" != "$TWRP_MANIFEST_SHA" ]]; then
+            echo "::error::TWRP manifest changed: expected $TWRP_MANIFEST_SHA, got $manifest_sha."
+            exit 1
+          fi
+
+          mkdir -p .repo/local_manifests
+          cp "$GITHUB_WORKSPACE/local_manifests/bluejay.xml" .repo/local_manifests/
+          repo sync --current-branch --no-clone-bundle --no-tags -j8
+
+          git -C vendor/google/bluejay lfs pull
+          mkdir -p device/google/bluejay-twrp
+          cp -a "$GITHUB_WORKSPACE/device/google/bluejay-twrp/." device/google/bluejay-twrp/
+          repo manifest -r -o "$ARTIFACT_DIR/twrp-sources.xml"
+
+      - name: Build matching Bluejay kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$KERNEL_SOURCE" "$ARTIFACT_DIR"
+          cd "$KERNEL_SOURCE"
+          repo init \
+            --depth=1 \
+            --manifest-url=https://github.com/LineageOS/android_kernel_google_gs-6.1_manifest \
+            --manifest-branch=lineage-23.2
+
+          manifest_sha="$(git -C .repo/manifests rev-parse HEAD)"
+          if [[ "$manifest_sha" != "$KERNEL_MANIFEST_SHA" ]]; then
+            echo "::error::Kernel manifest changed: expected $KERNEL_MANIFEST_SHA, got $manifest_sha."
+            exit 1
+          fi
+
+          repo sync --current-branch --no-clone-bundle --no-tags -j8
+          ./build_bluejay.sh 2>&1 | tee "$ARTIFACT_DIR/kernel-build.log"
+
+          dist="$KERNEL_SOURCE/out/bluejay/dist"
+          if [[ ! -s "$dist/boot.img" ]]; then
+            echo "::error::Bluejay kernel build did not produce the expected boot.img."
+            exit 1
+          fi
+          cp -a "$dist/." "$ANDROID_SOURCE/device/google/bluejay-kernels/6.1/"
+
+      - name: Build recovery in vendor_boot
+        shell: bash
+        run: |
+          set -eo pipefail
+          cd "$ANDROID_SOURCE"
+          repo manifest -r -o "$ARTIFACT_DIR/recovery-sources.xml"
+          (
+            source build/envsetup.sh
+            lunch twrp_bluejay-eng
+            mka vendorbootimage
+          ) 2>&1 | tee "$ARTIFACT_DIR/recovery-build.log"
+
+          image="$ANDROID_SOURCE/out/target/product/bluejay/vendor_boot.img"
+          if [[ ! -s "$image" ]]; then
+            echo "::error::Build completed without the expected vendor_boot.img."
+            exit 1
+          fi
+
+          cp "$image" "$ARTIFACT_DIR/vendor_boot.img"
+          sha256sum "$ARTIFACT_DIR/vendor_boot.img" > "$ARTIFACT_DIR/SHA256SUMS"
+          stat --printf='vendor_boot.img size: %s bytes\n' "$ARTIFACT_DIR/vendor_boot.img" \
+            > "$ARTIFACT_DIR/image-info.txt"
+
+      - name: Upload unflashed build artifact and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: bluejay-twrp-vendor-boot
+          path: ${{ runner.temp }}/bluejay-artifact/
+          if-no-files-found: error
+          retention-days: 14
