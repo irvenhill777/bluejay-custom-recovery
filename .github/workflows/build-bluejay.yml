@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-16core
+    runs-on: runs-on=${{ github.run_id }}/family=m8i/cpu=16/ram=64/volume=600gb:gp3/image=ubuntu24-full-x64
     timeout-minutes: 360
     env:
       TWRP_MANIFEST_SHA: 814b553116ceedde197f70389cff9661d81d8337
@@ -29,6 +29,9 @@ jobs:
       ARTIFACT_DIR: ${{ runner.temp }}/bluejay-artifact
 
     steps:
+      - name: Start RunsOn runner
+        uses: runs-on/action@v2
+
       - name: Check out build configuration
         uses: actions/checkout@v4
 
@@ -36,15 +39,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          disk_gb="$(df -BG --output=avail "$RUNNER_TEMP" | awk 'NR == 2 { gsub(/G/, ""); print $1 }')"
+          disk_bytes="$(df -B1 --output=avail "$RUNNER_TEMP" | awk 'NR == 2 { print $1 }')"
           memory_kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)"
           cpu_count="$(nproc)"
 
-          if (( disk_gb < 500 )); then
+          if (( disk_bytes < 500000000000 )); then
+            disk_gb=$((disk_bytes / 1000000000))
             echo "::error::At least 500 GB free disk is required; runner has ${disk_gb} GB."
             exit 1
           fi
-          if (( memory_kb < 60000000 )); then
+          if (( memory_kb < 62500000 )); then
             echo "::error::At least 64 GB RAM is required; runner has ${memory_kb} kB."
             exit 1
           fi
@@ -84,6 +88,11 @@ jobs:
           mkdir -p .repo/local_manifests
           cp "$GITHUB_WORKSPACE/local_manifests/bluejay.xml" .repo/local_manifests/
           repo sync --current-branch --no-clone-bundle --no-tags -j8
+
+          recovery="$ANDROID_SOURCE/bootable/recovery"
+          labs_patch="$GITHUB_WORKSPACE/device/google/bluejay-twrp/patches/gui2-labs.patch"
+          git -C "$recovery" apply --check "$labs_patch"
+          git -C "$recovery" apply "$labs_patch"
 
           git -C vendor/google/bluejay lfs pull
           mkdir -p device/google/bluejay-twrp
@@ -140,10 +149,11 @@ jobs:
           stat --printf='vendor_boot.img size: %s bytes\n' "$ARTIFACT_DIR/vendor_boot.img" \
             > "$ARTIFACT_DIR/image-info.txt"
 
-      - name: Upload unflashed build artifact and provenance
+      - name: Upload build output and diagnostics
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: bluejay-twrp-vendor-boot
           path: ${{ runner.temp }}/bluejay-artifact/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14

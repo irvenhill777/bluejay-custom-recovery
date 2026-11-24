@@ -5,6 +5,12 @@
     <remote name="lineage"
             fetch="https://github.com/LineageOS" />
 
+    <remove-project name="android_bootable_recovery" />
+    <project name="android_bootable_recovery"
+             path="bootable/recovery"
+             remote="twrp-16.0"
+             revision="a93a12ec107265ab9c3c7fe3e4f96c8740a01337" />
+
     <project name="device_google_bluejay"
              path="device/google/bluejay"
              remote="evolution"

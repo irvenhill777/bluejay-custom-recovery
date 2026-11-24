@@ -8,11 +8,11 @@ Build a Pixel 6a (`bluejay`) custom recovery with a distinctive red-and-black in
 
 These projects are separate recovery distributions, not plug-in modules. Do not copy all four trees together and expect them to build: their recovery forks, UI/resource changes, build assumptions, and licenses may conflict. The recommended architecture is one TWRP-derived framework as the base, with only individually reviewed and compatible features ported from the other projects. This is an architectural recommendation, not approval of any source revision. Preserve upstream notices and license terms; prefer supported configuration or narrowly scoped patches over maintaining a divergent fork.
 
-The experimental candidate is the [TWRP-Test `twrp-16.0` manifest](https://github.com/TWRP-Test/platform_manifest_twrp_aosp/tree/twrp-16.0) with the Evolution X Bluejay `bka` device/vendor sources and the LineageOS GS-6.1 `lineage-23.2` kernel dependencies. A minimal TWRP product overlay and manual GitHub Actions workflow are now present. This is not a validated source set: the TWRP manifest is a community fork, the Evolution tree is ROM-oriented, and the kernel integration has not been tested with the recovery base.
+The experimental candidate is the [TWRP-Test `twrp-16.0` manifest](https://github.com/TWRP-Test/platform_manifest_twrp_aosp/tree/twrp-16.0) with the Evolution X Bluejay `bka` device/vendor sources and the LineageOS GS-6.1 `lineage-23.2` kernel dependencies. A minimal TWRP product overlay, a GUI2 Labs patch against pinned recovery commit `a93a12ec107265ab9c3c7fe3e4f96c8740a01337`, and a manual GitHub Actions workflow are present. This is not a validated source set: the TWRP manifest is a community fork, the Evolution tree is ROM-oriented, and the kernel integration has not been tested with the recovery base.
 
 The earlier `irvenhill777/android_device_google_bluejay` `twrp-android16` branch is not used as-is because its product metadata is stale and its board configuration has a `2099-12-31` security-patch override. The older linked Bluejay manifest is Android 13-era.
 
-The first implementation milestone is a minimal `vendor_boot.img` recovery build and non-destructive boot validation. Root management, stock restore, and other advanced actions stay unavailable until their own compatibility and hardware tests pass. The workflow targets the `ubuntu-24.04-16core` GitHub larger-runner label and enforces a minimum of 500 GB free disk, 64 GB RAM, and 16 CPU cores.
+The first implementation milestone is a minimal `vendor_boot.img` recovery build and non-destructive boot validation. Root management, stock restore, and other advanced actions stay unavailable until their own compatibility and hardware tests pass. To support this personal-account repository, the workflow targets an ephemeral RunsOn AWS runner with 16 vCPU, 64 GB RAM, and a 600 GB volume, then checks for at least 500 GB free disk. RunsOn supports personal GitHub accounts, but requires its GitHub App and AWS stack to be set up and incurs AWS charges; review [its quickstart](https://runs-on.com/quickstart/) and [pricing](https://runs-on.com/pricing/) before enabling it.
 
 ## Functional specification
 
@@ -72,6 +72,8 @@ Potential experiments, subject to framework support and review:
 
 These are proposal candidates, not promised features. Do not put an experiment in a release build until its owner, source revision, licensing, failure behavior, and device test results are recorded. Experiments involving firmware installation, boot/slot changes, security-policy changes, partition writes, filesystem repair, or unexplained data loss are excluded.
 
+The current Labs patch is only a first, unbuilt integration: it reports visible USB devices and mapper nodes read-only, samples touch coordinates, reads selected build properties, and links to the existing installer/log-export screens. It does not implement a standalone backup checksum scan, logical-group free-space report, diagnostic preview/redaction, or a full touch-point visualization. Those entries state their limitations; do not describe them as complete.
+
 ### External storage
 
 - The Pixel 6a has no internal microSD slot. “SD card” support means a card connected through a compatible USB-C OTG adapter/card reader.
@@ -100,4 +102,4 @@ These are proposal candidates, not promised features. Do not put an experiment i
 
 ## Current status
 
-No recovery image has been built or hardware-validated as part of this repository. The build scaffold has not been run, and none of the specified UI, storage, root, rescue, or stock-restore features is implemented in the image. See [the readiness record](bluejay-android16-readiness.md) before treating any build as usable.
+No recovery image has been built or hardware-validated as part of this repository. The Labs UI patch has not been built or device-tested, and the listed limitations remain. Root, rescue, and stock-restore features are not implemented. See [the readiness record](bluejay-android16-readiness.md) before treating any build as usable.

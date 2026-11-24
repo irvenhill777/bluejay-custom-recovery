@@ -1,0 +1,712 @@
+diff --git a/gui2/Android.bp b/gui2/Android.bp
+index 58cb569..5ea5e0f 100644
+--- a/gui2/Android.bp
++++ b/gui2/Android.bp
+@@ -77,6 +77,7 @@ cc_library_shared {
+         "gui2.cpp",
+         "gui2_svg_cache.cpp",
+         "backend/rgb_to_i420.cpp",
++        "backend/labs_backend.cpp",
+         "backend/webm_vp8.cpp",
+         "backend/status_backend.cpp",
+         "i18n/*.cpp",
+@@ -91,6 +92,7 @@ cc_library_shared {
+         "pages/home_page.cpp",
+         "pages/hardware_page.cpp",
+         "pages/language_page.cpp",
++        "pages/labs_page.cpp",
+         "pages/page_router.cpp",
+         "pages/reboot_page.cpp",
+         "pages/general_settings_page.cpp",
+diff --git a/gui2/backend/labs_backend.cpp b/gui2/backend/labs_backend.cpp
+new file mode 100644
+index 0000000..1ed8f45
+--- /dev/null
++++ b/gui2/backend/labs_backend.cpp
+@@ -0,0 +1,196 @@
++#include "backend/labs_backend.h"
++
++#include <dirent.h>
++#include <cerrno>
++#include <cstring>
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
++
++#include <android-base/properties.h>
++
++#include <algorithm>
++#include <fstream>
++#include <iterator>
++#include <sstream>
++#include <string>
++#include <vector>
++
++namespace gui2_backend {
++namespace {
++
++bool directory_entries(const char* path, std::vector<std::string>* entries, std::string* error) {
++  if (entries == nullptr || error == nullptr) return false;
++  entries->clear();
++  DIR* directory = opendir(path);
++  if (directory == nullptr) {
++    *error = std::strerror(errno);
++    return false;
++  }
++
++  errno = 0;
++  while (dirent* entry = readdir(directory)) {
++    const std::string name(entry->d_name);
++    if (name != "." && name != "..") entries->push_back(name);
++  }
++  const int read_error = errno;
++  closedir(directory);
++  if (read_error != 0) {
++    entries->clear();
++    *error = std::strerror(read_error);
++    return false;
++  }
++  std::sort(entries->begin(), entries->end());
++  return true;
++}
++
++std::string read_file(const std::string& path) {
++  std::ifstream input(path);
++  std::string value;
++  if (input >> value) return value;
++  return {};
++}
++
++std::string otg_report() {
++  std::ostringstream report;
++  report << "Read-only USB host diagnostics\n";
++
++  std::vector<std::string> devices;
++  std::string error;
++  if (!directory_entries("/sys/bus/usb/devices", &devices, &error)) {
++    report << "USB device details unavailable: " << error << ".\n";
++    return report.str();
++  }
++  size_t found = 0;
++  for (const auto& device : devices) {
++    const std::string path = "/sys/bus/usb/devices/" + device;
++    const std::string vendor = read_file(path + "/idVendor");
++    const std::string product = read_file(path + "/idProduct");
++    if (vendor.empty() || product.empty()) continue;
++    report << "USB device " << device << ": " << vendor << ":" << product;
++    const std::string name = read_file(path + "/product");
++    if (!name.empty()) report << " (" << name << ")";
++    report << "\n";
++    ++found;
++  }
++
++  if (found == 0) report << "No USB devices are currently reported by sysfs.\n";
++  std::ifstream mounts("/proc/mounts");
++  if (!mounts) {
++    report << "Current mount state is unavailable.\n";
++  } else {
++    std::string line;
++    size_t shown_mounts = 0;
++    while (std::getline(mounts, line)) {
++      std::istringstream fields(line);
++      std::string source;
++      std::string destination;
++      std::string file_system;
++      if (!(fields >> source >> destination >> file_system)) continue;
++      if (source.rfind("/dev/block/sd", 0) != 0 && source.rfind("/dev/block/usb", 0) != 0)
++        continue;
++      report << "Removable block mount: " << source << " at " << destination << " ("
++             << file_system << ")\n";
++      if (++shown_mounts == 16) {
++        report << "Additional removable mounts omitted.\n";
++        break;
++      }
++    }
++    if (shown_mounts == 0) report << "No removable USB block mounts are listed.\n";
++  }
++  report << "No media was mounted or changed.\n";
++  return report.str();
++}
++
++std::string dynamic_partition_report() {
++  std::ostringstream report;
++  report << "Read-only logical block-device view\n";
++
++  std::vector<std::string> devices;
++  std::string error;
++  if (!directory_entries("/dev/block/mapper", &devices, &error)) {
++    report << "Logical mapper details unavailable: " << error << ".\n";
++    report << "No partition or mapping was changed.\n";
++    return report.str();
++  }
++  if (devices.empty()) {
++    report << "No logical mapper devices are visible in this recovery.\n";
++    report << "Group capacity/free-space data is unavailable without lpdump support.\n";
++    report << "No partition or mapping was changed.\n";
++    return report.str();
++  }
++
++  size_t shown = 0;
++  for (const auto& name : devices) {
++    if (name == "control") continue;
++    if (shown == 32) {
++      report << "Additional mapper entries omitted.\n";
++      break;
++    }
++
++    const std::string device_path = "/dev/block/mapper/" + name;
++    struct stat status {};
++    report << name;
++    if (stat(device_path.c_str(), &status) == 0 && S_ISBLK(status.st_mode)) {
++      const std::string size_path = "/sys/dev/block/" + std::to_string(major(status.st_rdev)) +
++                                    ":" + std::to_string(minor(status.st_rdev)) + "/size";
++      const std::string sectors = read_file(size_path);
++      if (!sectors.empty()) report << " (" << sectors << " sectors)";
++    } else {
++      report << " (size unavailable)";
++    }
++    report << "\n";
++    ++shown;
++  }
++  report << "Logical group capacity/free space is not reported by this view.\n";
++  report << "No partition or mapping was changed.\n";
++  return report.str();
++}
++
++std::string property_value(const char* key) {
++  const std::string value = android::base::GetProperty(key, "");
++  return value.empty() ? "not reported" : value;
++}
++
++std::string compatibility_report() {
++  std::ostringstream report;
++  report << "Read-only recovery compatibility report\n"
++         << "Device: " << property_value("ro.product.device") << "\n"
++         << "Model: " << property_value("ro.product.model") << "\n"
++         << "Build: " << property_value("ro.build.display.id") << "\n"
++         << "Android release: " << property_value("ro.build.version.release") << "\n"
++         << "Recovery: " << property_value("ro.twrp.version") << "\n"
++         << "Active slot: " << property_value("ro.boot.slot_suffix") << "\n"
++         << "This report does not verify image compatibility or bootability.\n";
++  return report.str();
++}
++
++}  // namespace
++
++std::string labs_report(lab_feature feature) {
++  switch (feature) {
++    case lab_feature::OTG_DIAGNOSTICS:
++      return otg_report();
++    case lab_feature::DYNAMIC_PARTITIONS:
++      return dynamic_partition_report();
++    case lab_feature::PACKAGE_PREFLIGHT:
++      return "Package preflight uses the existing installer selection and review flow. "
++             "Metadata is advisory; only the installer's explicit verification result "
++             "describes signature verification.";
++    case lab_feature::BACKUP_VERIFICATION:
++      return "Standalone checksum scanning is unavailable in this build. No backup was "
++             "opened and no restore was started. Do not start a restore just to test a "
++             "backup checksum.";
++    case lab_feature::TOUCH_DISPLAY:
++      return "Touch input was received. This screen does not change brightness, rotation, "
++             "or partition settings.";
++    case lab_feature::DIAGNOSTIC_BUNDLE:
++      return "The existing log export can include selected recovery, kernel, and logcat "
++             "logs. Automatic redaction and a complete export preview are unavailable; "
++             "logs may contain personal or device identifiers.";
++    case lab_feature::COMPATIBILITY_REPORT:
++      return compatibility_report();
++  }
++  return "Unknown Labs feature.";
++}
++
++}  // namespace gui2_backend
+diff --git a/gui2/backend/labs_backend.h b/gui2/backend/labs_backend.h
+new file mode 100644
+index 0000000..5160510
+--- /dev/null
++++ b/gui2/backend/labs_backend.h
+@@ -0,0 +1,22 @@
++#ifndef GUI2_BACKEND_LABS_BACKEND_H
++#define GUI2_BACKEND_LABS_BACKEND_H
++
++#include <string>
++
++namespace gui2_backend {
++
++enum class lab_feature {
++  OTG_DIAGNOSTICS,
++  DYNAMIC_PARTITIONS,
++  PACKAGE_PREFLIGHT,
++  BACKUP_VERIFICATION,
++  TOUCH_DISPLAY,
++  DIAGNOSTIC_BUNDLE,
++  COMPATIBILITY_REPORT,
++};
++
++std::string labs_report(lab_feature feature);
++
++}  // namespace gui2_backend
++
++#endif  // GUI2_BACKEND_LABS_BACKEND_H
+diff --git a/gui2/gui2.cpp b/gui2/gui2.cpp
+index e308839..60cd32f 100644
+--- a/gui2/gui2.cpp
++++ b/gui2/gui2.cpp
+@@ -16,6 +16,7 @@
+ #include "app/screen_actions.h"
+ #include "app/storage_task.h"
+ #include "backend/hardware_settings.h"
++#include "backend/labs_backend.h"
+ #include "backend/screen_backend.h"
+ #include "components/apply_button.h"
+ #include "components/check_row.h"
+@@ -54,6 +55,7 @@
+ #include "pages/hardware_page.h"
+ #include "pages/home_page.h"
+ #include "pages/language_page.h"
++#include "pages/labs_page.h"
+ #include "pages/page_router.h"
+ #include "pages/page_state.h"
+ #include "pages/reboot_page.h"
+@@ -243,6 +245,8 @@ static void show_haptics_page(page_transition transition);
+ static void show_recording_page(page_transition transition);
+ static void show_console_page(page_transition transition);
+ static void show_export_log_page(page_transition transition);
++static void show_labs_page(page_transition transition);
++static void labs_option_event_cb(lv_event_t* event);
+ static void show_console_settings_page(page_transition transition);
+ static void show_file_manager_page(page_transition transition);
+ static void show_file_actions_page(page_transition transition);
+@@ -448,6 +452,7 @@ enum class settings_target {
+   HAPTICS,
+   RECORDING,
+   EXPORT_LOG,
++  LABS,
+   CONSOLE_SETTINGS,
+   GENERAL_SETTINGS,
+   KEYBOARD_SETTINGS,
+@@ -475,6 +480,7 @@ static constexpr settings_target brightness_target = settings_target::BRIGHTNESS
+ static constexpr settings_target haptics_target = settings_target::HAPTICS;
+ static constexpr settings_target recording_target = settings_target::RECORDING;
+ static constexpr settings_target export_log_target = settings_target::EXPORT_LOG;
++static constexpr settings_target labs_target = settings_target::LABS;
+ static constexpr settings_target console_settings_target = settings_target::CONSOLE_SETTINGS;
+ static constexpr settings_target general_settings_target = settings_target::GENERAL_SETTINGS;
+ static constexpr settings_target keyboard_settings_target = settings_target::KEYBOARD_SETTINGS;
+@@ -493,6 +499,15 @@ static constexpr settings_target install_ramdisk_target = settings_target::INSTA
+ static constexpr settings_target reflash_twrp_target = settings_target::REFLASH_TWRP;
+ static constexpr settings_target install_kernel_target = settings_target::INSTALL_KERNEL;
+ static constexpr settings_target unmap_super_target = settings_target::UNMAP_SUPER;
++static constexpr gui2_backend::lab_feature labs_features[] = {
++    gui2_backend::lab_feature::OTG_DIAGNOSTICS,
++    gui2_backend::lab_feature::DYNAMIC_PARTITIONS,
++    gui2_backend::lab_feature::PACKAGE_PREFLIGHT,
++    gui2_backend::lab_feature::BACKUP_VERIFICATION,
++    gui2_backend::lab_feature::TOUCH_DISPLAY,
++    gui2_backend::lab_feature::DIAGNOSTIC_BUNDLE,
++    gui2_backend::lab_feature::COMPATIBILITY_REPORT,
++};
+ // 0..count-1 for the rows of a list to carry as their user data. A longer list
+ // gets a new table; the old ones stay, so rows already built keep theirs.
+ static const int* row_indices(size_t count) {
+@@ -584,6 +599,11 @@ static void navigate_back(void) {
+   if (page_router.current() == page_kind::REBOOT) {
+     const auto return_request = page_state.reboot.return_request;
+     navigate_to(return_request.id, return_request.payload, page_transition::POP);
++  } else if (page_router.current() == page_kind::LABS) {
++    page_state.labs_result_label = nullptr;
++    navigate_to(page_kind::ACTION,
++                &gui2_pages::action_definitions()[static_cast<int>(action_id::ADVANCED)],
++                page_transition::POP);
+   } else if (page_router.current() == page_kind::LANGUAGE ||
+              page_router.current() == page_kind::APPEARANCE ||
+              page_router.current() == page_kind::TIMEZONE ||
+@@ -1324,6 +1344,8 @@ static void settings_option_event_cb(lv_event_t* event) {
+     navigate_to(page_kind::SIDELOAD);
+   else if (*target == settings_target::EXPORT_LOG)
+     navigate_to(page_kind::EXPORT_LOG);
++  else if (*target == settings_target::LABS)
++    navigate_to(page_kind::LABS);
+   else if (*target == settings_target::CONSOLE_SETTINGS)
+     navigate_to(page_kind::CONSOLE_SETTINGS);
+   else if (*target == settings_target::GENERAL_SETTINGS)
+@@ -1355,6 +1377,45 @@ static void settings_option_event_cb(lv_event_t* event) {
+     open_advanced_tool(*target);
+ }
+ 
++static void labs_option_event_cb(lv_event_t* event) {
++  if (lv_event_get_code(event) != LV_EVENT_CLICKED || !accept_click(event)) return;
++  const auto* feature =
++      static_cast<const gui2_backend::lab_feature*>(lv_event_get_user_data(event));
++  if (feature == nullptr) return;
++
++  if (*feature == gui2_backend::lab_feature::PACKAGE_PREFLIGHT) {
++    page_state.labs_result_label = nullptr;
++    page_state.install_queue.clear();
++    page_state.install_from_file_manager = false;
++    page_state.install_repack = false;
++    navigate_to(page_kind::INSTALL);
++    return;
++  }
++  if (*feature == gui2_backend::lab_feature::DIAGNOSTIC_BUNDLE) {
++    page_state.labs_result_label = nullptr;
++    navigate_to(page_kind::EXPORT_LOG);
++    return;
++  }
++  if (page_state.labs_result_label == nullptr) return;
++
++  std::string report = gui2_backend::labs_report(*feature);
++  if (*feature == gui2_backend::lab_feature::TOUCH_DISPLAY) {
++    lv_indev_t* input = lv_event_get_indev(event);
++    if (input != nullptr) {
++      lv_point_t point{};
++      lv_indev_get_point(input, &point);
++      report += "\nTouch sample: (" + std::to_string(point.x) + ", " +
++                std::to_string(point.y) + ")";
++    }
++    lv_display_t* display = lv_display_get_default();
++    if (display != nullptr) {
++      report += "\nPanel: " + std::to_string(lv_display_get_horizontal_resolution(display)) +
++                " x " + std::to_string(lv_display_get_vertical_resolution(display));
++    }
++  }
++  lv_label_set_text(page_state.labs_result_label, report.c_str());
++}
++
+ static void refresh_language_options(void) {
+   for (size_t i = 0; i < gui2_i18n::kLanguageCount; ++i) {
+     const bool selected = pending_language == language_values[i];
+@@ -5528,6 +5589,7 @@ static void show_action_page(const action_definition& definition, page_transitio
+     advanced_options.metrics = &ui;
+     advanced_options.strings = &strings();
+     advanced_options.file_manager_target = &file_manager_target;
++    advanced_options.labs_target = &labs_target;
+     // Absent from the build, or switched off for this device: no row at all.
+     advanced_options.sideload_target = sideload != nullptr ? &sideload_target : nullptr;
+     advanced_options.wifi_target = wifi != nullptr && wifi->available() ? &wifi_target
+@@ -5560,6 +5622,23 @@ static void show_action_page(const action_definition& definition, page_transitio
+   }
+ }
+ 
++static void show_labs_page(page_transition transition) {
++  create_page_scaffold(page_kind::LABS, false, strings().labs_title, strings().labs_summary, 0,
++                       transition);
++  page_state.labs_result_label = nullptr;
++
++  gui2_pages::labs_page_options options;
++  options.content = main_content;
++  options.metrics = &ui;
++  options.strings = &strings();
++  options.features = labs_features;
++  options.feature_count = std::size(labs_features);
++  options.result_label = &page_state.labs_result_label;
++  options.event_callback = labs_option_event_cb;
++  options.press_guard_callback = press_cancel_guard_cb;
++  gui2_pages::build_labs_page(options);
++}
++
+ static void show_export_log_page(page_transition transition) {
+   const int bottom_reserved = ui.nav_height + single_line_card_height() + ui.cards_top_gap * 2;
+   create_page_scaffold(page_kind::EXPORT_LOG, false, strings().export_log_title,
+@@ -5626,6 +5705,9 @@ static void route_page(const gui2_pages::page_request& request) {
+ 
+ static void build_page(const gui2_pages::page_request& request) {
+   switch (request.id) {
++    case page_kind::LABS:
++      show_labs_page(request.transition);
++      return;
+     case page_kind::HOME:
+       show_home_page(request.transition);
+       return;
+diff --git a/gui2/i18n/en.cpp b/gui2/i18n/en.cpp
+index 632b532..014ec6a 100644
+--- a/gui2/i18n/en.cpp
++++ b/gui2/i18n/en.cpp
+@@ -673,7 +673,25 @@ extern const language_pack kEnglish = {
+   "Zip Treble compatibility error!",
+   "Error installing zip file '%s'",
+   "One or more zip requested a cache wipe -- Wiping cache now.",
+-
++  "Labs",
++  "Read-only experiments and gated recovery tools",
++  "EXPERIMENTAL — NOT VALIDATED. Tap each experiment to opt in for this recovery session only. Choices do not persist after restart.",
++  "Tap one experiment to run it. Results are advisory and do not persist.",
++  "Experiments",
++  "OTG diagnostics",
++  "Requires a connected USB-C host device. Reads device details only; no auto-mount or writes. Tap to inspect; Back returns.",
++  "Dynamic partition viewer",
++  "Requires visible mapper devices. Read-only names and sizes; no resize or writes. Tap to inspect; Back returns.",
++  "Package preflight",
++  "Requires a local ZIP. Metadata is advisory, not a signature guarantee. Opens the installer; no flash until separately confirmed. Back cancels.",
++  "Backup verification",
++  "Requires a completed backup. Standalone checksum scanning is unavailable; no file is opened and no restore is started. Back returns.",
++  "Touch and display diagnostics",
++  "Requires touch input. Samples this tap and panel resolution; changes no display, partition, or mount settings. Back returns.",
++  "Expanded diagnostic bundle",
++  "Requires readable logs. Logs may contain identifiers. Opens export controls; exporting writes to selected storage, and can be cancelled.",
++  "Recovery compatibility report",
++  "Requires build properties. Read-only; it does not guarantee image compatibility or bootability. Tap to inspect; Back returns.",
+ };
+ 
+ }  // namespace gui2_i18n
+diff --git a/gui2/i18n/i18n.h b/gui2/i18n/i18n.h
+index de167e4..bec732d 100644
+--- a/gui2/i18n/i18n.h
++++ b/gui2/i18n/i18n.h
+@@ -668,6 +668,25 @@ struct language_pack {
+   const char* zip_compatible_err;
+   const char* zip_err;
+   const char* zip_wipe_cache;
++  const char* labs_title;
++  const char* labs_summary;
++  const char* labs_warning;
++  const char* labs_initial_result;
++  const char* labs_section;
++  const char* labs_otg_title;
++  const char* labs_otg_summary;
++  const char* labs_dynamic_title;
++  const char* labs_dynamic_summary;
++  const char* labs_package_title;
++  const char* labs_package_summary;
++  const char* labs_backup_title;
++  const char* labs_backup_summary;
++  const char* labs_touch_title;
++  const char* labs_touch_summary;
++  const char* labs_bundle_title;
++  const char* labs_bundle_summary;
++  const char* labs_compat_title;
++  const char* labs_compat_summary;
+ };
+ 
+ // One key-to-field map shared by every language; translations live in language_pack.
+diff --git a/gui2/i18n/ru.cpp b/gui2/i18n/ru.cpp
+index 57a87c7..f3f13cf 100644
+--- a/gui2/i18n/ru.cpp
++++ b/gui2/i18n/ru.cpp
+@@ -673,6 +673,25 @@ extern const language_pack kRussian = {
+   "Ошибка совместимости ZIP с Treble!",
+   "Ошибка при установке ZIP-файла '%s'",
+   "Один или более ZIP запрашивают очистку cache -- Очистка cache...",
++  "Лаборатория",
++  "Эксперименты только для чтения и ограниченные инструменты восстановления",
++  "ЭКСПЕРИМЕНТАЛЬНО — НЕ ПРОВЕРЕНО. Каждый пункт запускается отдельно только на этот сеанс Recovery; после перезапуска выбор не сохраняется.",
++  "Нажмите эксперимент для запуска. Результаты справочные и не сохраняются.",
++  "Эксперименты",
++  "Диагностика OTG",
++  "Требуется подключённое USB-C host-устройство. Только чтение сведений; без автомонтирования и записи. Нажмите для проверки; Назад — выход.",
++  "Просмотр динамических разделов",
++  "Требуются видимые mapper-устройства. Только чтение имён и размеров; без изменения и записи. Нажмите для проверки; Назад — выход.",
++  "Предварительная проверка пакета",
++  "Требуется локальный ZIP. Метаданные справочные и не подтверждают подпись. Откроется установщик; прошивка — только после отдельного подтверждения. Назад — отмена.",
++  "Проверка резервной копии",
++  "Требуется готовая резервная копия. Отдельное сканирование контрольных сумм недоступно; файл не открывается и восстановление не запускается. Назад — выход.",
++  "Диагностика сенсора и экрана",
++  "Требуется сенсорный ввод. Измеряется касание и разрешение экрана; параметры дисплея, разделов и монтирования не меняются. Назад — выход.",
++  "Расширенный диагностический пакет",
++  "Нужны доступные журналы. В них могут быть идентификаторы. Откроются параметры экспорта; экспорт записывает данные в выбранное хранилище и может быть отменён.",
++  "Отчёт о совместимости Recovery",
++  "Требуются свойства сборки. Только чтение; совместимость и загрузка образа не гарантируются. Нажмите для просмотра; Назад — выход.",
+ };
+ 
+ }  // namespace gui2_i18n
+\ No newline at end of file
+diff --git a/gui2/i18n/zh_cn.cpp b/gui2/i18n/zh_cn.cpp
+index 1ba3901..c7db5f3 100644
+--- a/gui2/i18n/zh_cn.cpp
++++ b/gui2/i18n/zh_cn.cpp
+@@ -671,6 +671,25 @@ extern const language_pack kSimplifiedChinese = {
+   "ZIP Treble 兼容性检查失败！",
+   "安装 Zip 刷机包“%s”时出错",
+   "一个或多个刷机包请求清除 Cache -- 正在清除 Cache。",
++  "实验室",
++  "只读实验与受限恢复工具",
++  "实验性 — 尚未验证。点击单项仅在本次 Recovery 会话中启用；重启后不会保留。",
++  "点击一项以运行。结果仅供参考且不会持久保存。",
++  "实验项目",
++  "OTG 诊断",
++  "需要连接 USB-C 主机设备。仅读取设备信息；不会自动挂载或写入。点击检查；返回即可退出。",
++  "动态分区查看器",
++  "需要可见的 mapper 设备。只读显示名称和大小；不会调整或写入。点击检查；返回即可退出。",
++  "刷机包预检",
++  "需要本地 ZIP。元数据仅供参考，不代表签名验证。打开安装器；需另行确认才会刷写。返回可取消。",
++  "备份校验",
++  "需要已有备份。本版本不支持独立校验和扫描；不会打开文件或开始恢复。返回即可退出。",
++  "触控与显示诊断",
++  "需要触控输入。采样本次触控和屏幕分辨率；不会更改显示、分区或挂载设置。返回即可退出。",
++  "扩展诊断包",
++  "需要可读取的日志。日志可能含设备标识。打开导出选项；导出会写入所选存储，可取消。",
++  "Recovery 兼容性报告",
++  "需要构建属性。只读；不保证镜像兼容或可启动。点击查看；返回即可退出。",
+ };
+ 
+ }  // namespace gui2_i18n
+diff --git a/gui2/i18n/zh_tw.cpp b/gui2/i18n/zh_tw.cpp
+index 790c338..4e6fbc9 100644
+--- a/gui2/i18n/zh_tw.cpp
++++ b/gui2/i18n/zh_tw.cpp
+@@ -671,7 +671,25 @@ extern const language_pack kTraditionalChinese = {
+   "ZIP Treble 相容性檢查失敗！",
+   "安裝 Zip 刷機包“%s”時出錯",
+   "一個或多個刷機包請求清除 Cache -- 正在清除 Cache。",
+-
++  "實驗室",
++  "唯讀實驗與受限復原工具",
++  "實驗性 — 尚未驗證。點選個別項目只在本次 Recovery 工作階段啟用；重新啟動後不會保留。",
++  "點選一項以執行。結果僅供參考且不會持續保存。",
++  "實驗項目",
++  "OTG 診斷",
++  "需要連接 USB-C 主機裝置。僅讀取裝置資訊；不會自動掛載或寫入。點選檢查；返回即可退出。",
++  "動態分割區檢視器",
++  "需要可見的 mapper 裝置。唯讀顯示名稱和大小；不會調整或寫入。點選檢查；返回即可退出。",
++  "刷機包預檢",
++  "需要本機 ZIP。中繼資料僅供參考，不代表簽章驗證。開啟安裝器；需另行確認才會刷寫。返回可取消。",
++  "備份驗證",
++  "需要現有備份。本版本不支援獨立 checksum 掃描；不會開啟檔案或開始還原。返回即可退出。",
++  "觸控與顯示診斷",
++  "需要觸控輸入。取樣本次觸控和面板解析度；不會變更顯示、分割區或掛載設定。返回即可退出。",
++  "擴充診斷套件",
++  "需要可讀取的日誌。日誌可能含裝置識別資訊。開啟匯出選項；匯出會寫入所選儲存空間，可取消。",
++  "Recovery 相容性報告",
++  "需要建置屬性。唯讀；不保證映像相容或可啟動。點選檢視；返回即可退出。",
+ };
+ 
+ }  // namespace gui2_i18n
+diff --git a/gui2/pages/advanced_page.cpp b/gui2/pages/advanced_page.cpp
+index 14c521d..34b7038 100644
+--- a/gui2/pages/advanced_page.cpp
++++ b/gui2/pages/advanced_page.cpp
+@@ -12,6 +12,11 @@ void build_advanced_page(const advanced_page_options& options) {
+       options.content, *options.metrics, options.strings->file_manager_title,
+       options.strings->file_manager_summary, options.option_event_callback,
+       options.file_manager_target, options.press_guard_callback);
++  if (options.labs_target != nullptr)
++    gui2_components::create_setting_card(
++        options.content, *options.metrics, options.strings->labs_title,
++        options.strings->labs_summary, options.option_event_callback, options.labs_target,
++        options.press_guard_callback);
+   if (options.sideload_target != nullptr)
+     gui2_components::create_setting_card(options.content, *options.metrics,
+                                          options.strings->sideload_title,
+diff --git a/gui2/pages/advanced_page.h b/gui2/pages/advanced_page.h
+index 1a975c4..b4b5bff 100644
+--- a/gui2/pages/advanced_page.h
++++ b/gui2/pages/advanced_page.h
+@@ -15,6 +15,7 @@ struct advanced_page_options {
+   lv_event_cb_t press_guard_callback = nullptr;
+   const void* file_manager_target = nullptr;
+   const void* export_log_target = nullptr;
++  const void* labs_target = nullptr;
+   // Null hides the row, which is what a build without Wi-Fi wants.
+   const void* wifi_target = nullptr;
+   const void* sideload_target = nullptr;
+diff --git a/gui2/pages/labs_page.cpp b/gui2/pages/labs_page.cpp
+new file mode 100644
+index 0000000..6075717
+--- /dev/null
++++ b/gui2/pages/labs_page.cpp
+@@ -0,0 +1,47 @@
++#include "pages/labs_page.h"
++
++#include <algorithm>
++#include <iterator>
++
++#include "components/section_label.h"
++#include "components/setting_card.h"
++#include "components/tip_card.h"
++
++namespace gui2_pages {
++
++void build_labs_page(const labs_page_options& options) {
++  if (options.content == nullptr || options.metrics == nullptr || options.strings == nullptr ||
++      options.features == nullptr || options.result_label == nullptr)
++    return;
++
++  const auto& metrics = *options.metrics;
++  const auto& strings = *options.strings;
++  gui2_components::create_tip_card(options.content, metrics, strings.labs_warning, metrics.danger,
++                                   metrics.danger_surface);
++
++  *options.result_label = lv_label_create(options.content);
++  lv_label_set_text(*options.result_label, strings.labs_initial_result);
++  lv_label_set_long_mode(*options.result_label, LV_LABEL_LONG_WRAP);
++  lv_obj_set_width(*options.result_label, std::max(1, metrics.content_width));
++  lv_obj_set_style_text_color(*options.result_label, metrics.secondary_text, LV_PART_MAIN);
++  lv_obj_set_style_text_font(*options.result_label, metrics.status_font, LV_PART_MAIN);
++
++  gui2_components::create_section_label(options.content, metrics, strings.labs_section);
++  const gui2_i18n::action_text entries[] = {
++      { strings.labs_otg_title, strings.labs_otg_summary, "" },
++      { strings.labs_dynamic_title, strings.labs_dynamic_summary, "" },
++      { strings.labs_package_title, strings.labs_package_summary, "" },
++      { strings.labs_backup_title, strings.labs_backup_summary, "" },
++      { strings.labs_touch_title, strings.labs_touch_summary, "" },
++      { strings.labs_bundle_title, strings.labs_bundle_summary, "" },
++      { strings.labs_compat_title, strings.labs_compat_summary, "" },
++  };
++  const size_t count = std::min(options.feature_count, std::size(entries));
++  for (size_t i = 0; i < count; ++i) {
++    gui2_components::create_setting_card(
++        options.content, metrics, entries[i].title, entries[i].summary, options.event_callback,
++        &options.features[i], options.press_guard_callback);
++  }
++}
++
++}  // namespace gui2_pages
+diff --git a/gui2/pages/labs_page.h b/gui2/pages/labs_page.h
+new file mode 100644
+index 0000000..5a29ead
+--- /dev/null
++++ b/gui2/pages/labs_page.h
+@@ -0,0 +1,28 @@
++#ifndef GUI2_PAGES_LABS_PAGE_H
++#define GUI2_PAGES_LABS_PAGE_H
++
++#include <cstddef>
++
++#include "backend/labs_backend.h"
++#include "core/ui_metrics.h"
++#include "i18n/i18n.h"
++#include "lvgl.h"
++
++namespace gui2_pages {
++
++struct labs_page_options {
++  lv_obj_t* content = nullptr;
++  const gui2_core::ui_metrics* metrics = nullptr;
++  const gui2_i18n::language_pack* strings = nullptr;
++  const gui2_backend::lab_feature* features = nullptr;
++  size_t feature_count = 0;
++  lv_obj_t** result_label = nullptr;
++  lv_event_cb_t event_callback = nullptr;
++  lv_event_cb_t press_guard_callback = nullptr;
++};
++
++void build_labs_page(const labs_page_options& options);
++
++}  // namespace gui2_pages
++
++#endif  // GUI2_PAGES_LABS_PAGE_H
+diff --git a/gui2/pages/page_router.h b/gui2/pages/page_router.h
+index e8877e9..065409d 100644
+--- a/gui2/pages/page_router.h
++++ b/gui2/pages/page_router.h
+@@ -53,6 +53,7 @@ enum class page_id {
+   TOOL_CONFIRM,
+   TOOL_PROGRESS,
+   TOOL_INPUT,
++  LABS,
+ };
+ 
+ struct page_request {
+diff --git a/gui2/pages/page_state.h b/gui2/pages/page_state.h
+index f29cf8b..72b1ad4 100644
+--- a/gui2/pages/page_state.h
++++ b/gui2/pages/page_state.h
+@@ -154,6 +154,7 @@ struct page_state {
+   bool install_console_armed = false;
+   uint64_t install_last_poll_ms = 0;
+   bool file_clipboard_move = false;
++  lv_obj_t* labs_result_label = nullptr;
+   lv_obj_t* kernel_log_card = nullptr;
+   lv_obj_t* logcat_card = nullptr;
+   console_page_view console;
