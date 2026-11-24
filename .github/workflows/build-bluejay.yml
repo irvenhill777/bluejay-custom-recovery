@@ -2,6 +2,13 @@ name: Build Bluejay TWRP vendor_boot
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - bluejay-pixel6a
+    paths:
+      - .github/workflows/build-bluejay.yml
+      - device/google/bluejay-twrp/**
+      - local_manifests/bluejay.xml
 
 permissions:
   contents: read
