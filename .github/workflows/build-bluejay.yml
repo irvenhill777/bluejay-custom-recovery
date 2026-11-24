@@ -19,8 +19,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on:
-      labels: ubuntu-24.04-16core
+    runs-on: ubuntu-24.04-16core
     timeout-minutes: 360
     env:
       TWRP_MANIFEST_SHA: 814b553116ceedde197f70389cff9661d81d8337
